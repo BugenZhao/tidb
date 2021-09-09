@@ -35,14 +35,15 @@ import (
 )
 
 const (
-	flagBackupTimeago    = "timeago"
-	flagBackupTS         = "backupts"
-	flagLastBackupTS     = "lastbackupts"
-	flagCompressionType  = "compression"
-	flagCompressionLevel = "compression-level"
-	flagRemoveSchedulers = "remove-schedulers"
-	flagIgnoreStats      = "ignore-stats"
-	flagUseBackupMetaV2  = "use-backupmeta-v2"
+	flagBackupTimeago     = "timeago"
+	flagBackupTS          = "backupts"
+	flagLastBackupTS      = "lastbackupts"
+	flagCompressionType   = "compression"
+	flagCompressionLevel  = "compression-level"
+	flagRemoveSchedulers  = "remove-schedulers"
+	flagIgnoreStats       = "ignore-stats"
+	flagUseBackupMetaV2   = "use-backupmeta-v2"
+	flagBackupSchemaInSQL = "backup-schema-in-sql"
 
 	flagGCTTL = "gcttl"
 
@@ -60,13 +61,14 @@ type CompressionConfig struct {
 type BackupConfig struct {
 	Config
 
-	TimeAgo          time.Duration `json:"time-ago" toml:"time-ago"`
-	BackupTS         uint64        `json:"backup-ts" toml:"backup-ts"`
-	LastBackupTS     uint64        `json:"last-backup-ts" toml:"last-backup-ts"`
-	GCTTL            int64         `json:"gc-ttl" toml:"gc-ttl"`
-	RemoveSchedulers bool          `json:"remove-schedulers" toml:"remove-schedulers"`
-	IgnoreStats      bool          `json:"ignore-stats" toml:"ignore-stats"`
-	UseBackupMetaV2  bool          `json:"use-backupmeta-v2"`
+	TimeAgo           time.Duration `json:"time-ago" toml:"time-ago"`
+	BackupTS          uint64        `json:"backup-ts" toml:"backup-ts"`
+	LastBackupTS      uint64        `json:"last-backup-ts" toml:"last-backup-ts"`
+	GCTTL             int64         `json:"gc-ttl" toml:"gc-ttl"`
+	RemoveSchedulers  bool          `json:"remove-schedulers" toml:"remove-schedulers"`
+	IgnoreStats       bool          `json:"ignore-stats" toml:"ignore-stats"`
+	UseBackupMetaV2   bool          `json:"use-backupmeta-v2"`
+	BackupSchemaInSQL bool          `json:"backup-schema-in-sql"`
 	CompressionConfig
 }
 
@@ -98,6 +100,9 @@ func DefineBackupFlags(flags *pflag.FlagSet) {
 	flags.Bool(flagIgnoreStats, true, "ignore backup stats, used for test")
 	// This flag is used for test. we should backup stats all the time.
 	_ = flags.MarkHidden(flagIgnoreStats)
+
+	flags.Bool(flagBackupSchemaInSQL, true,
+		"whether backup schemas in sql file")
 
 	flags.Bool(flagUseBackupMetaV2, false,
 		"use backup meta v2 to store meta info")
@@ -156,6 +161,7 @@ func (cfg *BackupConfig) ParseFromFlags(flags *pflag.FlagSet) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
+	cfg.BackupSchemaInSQL, err = flags.GetBool(flagBackupSchemaInSQL)
 	cfg.UseBackupMetaV2, err = flags.GetBool(flagUseBackupMetaV2)
 	return errors.Trace(err)
 }
@@ -454,6 +460,14 @@ func RunBackup(c context.Context, g glue.Glue, cmdName string, cfg *BackupConfig
 		ctx, metawriter, mgr.GetStorage(), statsHandle, backupTS, schemasConcurrency, cfg.ChecksumConcurrency, skipChecksum, updateCh)
 	if err != nil {
 		return errors.Trace(err)
+	}
+
+	// Backup schema in SQL
+	if cfg.BackupSchemaInSQL {
+		err = schemas.BackupSchemaInSQL(ctx, g, client.GetStorage(), mgr.GetStorage())
+		if err != nil {
+			return errors.Trace(err)
+		}
 	}
 
 	err = metawriter.FlushBackupMeta(ctx)

@@ -15,12 +15,17 @@ import (
 	"github.com/pingcap/parser/model"
 	"github.com/pingcap/tidb/br/pkg/checksum"
 	"github.com/pingcap/tidb/br/pkg/glue"
+	brkv "github.com/pingcap/tidb/br/pkg/kv"
 	"github.com/pingcap/tidb/br/pkg/logutil"
 	"github.com/pingcap/tidb/br/pkg/metautil"
+	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/br/pkg/summary"
 	"github.com/pingcap/tidb/br/pkg/utils"
 	"github.com/pingcap/tidb/kv"
+	plannercore "github.com/pingcap/tidb/planner/core"
+	"github.com/pingcap/tidb/sessionctx"
 	"github.com/pingcap/tidb/statistics/handle"
+	"github.com/pingcap/tidb/util"
 	"github.com/pingcap/tipb/go-tipb"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -30,7 +35,44 @@ const (
 	// DefaultSchemaConcurrency is the default number of the concurrent
 	// backup schema tasks.
 	DefaultSchemaConcurrency = 64
+	CreateDBFileSuffix       = "schema-create.sql"
+	CreateTableFileSuffix    = "schema.sql"
 )
+
+func GetCommonHandleId(t model.TableInfo) []int64 {
+	if !t.IsCommonHandle {
+		return nil
+	}
+	var ids []int64
+	for _, i := range t.Indices {
+		if i.Primary {
+			// Iterate the `indexColumns` fist, so the order in `indexColumns` can preserve
+			for _, iCol := range i.Columns {
+				for _, tCol := range t.Columns {
+					if tCol.Name == iCol.Name {
+						ids = append(ids, t.ID)
+						break
+					}
+				}
+			}
+			return ids
+		}
+	}
+	return nil
+}
+
+func TableToProto(ctx sessionctx.Context, name string, t model.TableInfo) (*tipb.TableInfo, error) {
+	ch := GetCommonHandleId(t)
+	cols := util.ColumnsToProto(t.Columns, t.PKIsHandle)
+	// Set the default value of the column
+	err := plannercore.SetPBColumnsDefaultValue(ctx, cols, t.Columns)
+	return &tipb.TableInfo{
+		Name:          &name,
+		TableId:       t.ID,
+		Columns:       cols,
+		CommonHandles: ch,
+	}, err
+}
 
 type scheamInfo struct {
 	tableInfo  *model.TableInfo
@@ -64,6 +106,36 @@ func (ss *Schemas) addSchema(
 	}
 }
 
+func (ss *Schemas) BackupSchemaInSQL(ctx context.Context, g glue.Glue, externalStore storage.ExternalStorage, store kv.Storage) error {
+	se, err := g.CreateSession(store)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	mark := make(map[string]bool)
+	for _, s := range ss.schemas {
+		if _, ok := mark[s.dbInfo.Name.L]; !ok {
+			str, err := se.ShowCreateDatabase(s.dbInfo)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			err = externalStore.WriteFile(ctx, fmt.Sprintf("%s-%s", s.dbInfo.Name.L, CreateDBFileSuffix), []byte(str))
+			if err != nil {
+				return errors.Trace(err)
+			}
+			mark[s.dbInfo.Name.L] = true
+		}
+		str, err := se.ShowCreateTable(s.tableInfo)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		err = externalStore.WriteFile(ctx, fmt.Sprintf("%s.%s-%s", s.dbInfo.Name.L, s.tableInfo.Name.L, CreateTableFileSuffix), []byte(str))
+		if err != nil {
+			return errors.Trace(err)
+		}
+	}
+	return nil
+}
+
 // BackupSchemas backups table info, including checksum and stats.
 func (ss *Schemas) BackupSchemas(
 	ctx context.Context,
@@ -87,6 +159,12 @@ func (ss *Schemas) BackupSchemas(
 	startAll := time.Now()
 	op := metautil.AppendSchema
 	metaWriter.StartWriteMetasAsync(ctx, op)
+
+	sessionCxt := brkv.NewSession(&brkv.SessionOptions{
+		Timestamp:        time.Now().Unix(),
+		RowFormatVersion: "2",
+	})
+
 	for _, s := range ss.schemas {
 		schema := s
 		workerPool.ApplyOnErrorGroup(errg, func() error {
@@ -139,9 +217,18 @@ func (ss *Schemas) BackupSchemas(
 					return errors.Trace(err)
 				}
 			}
+			tableInfo, err := TableToProto(sessionCxt, fmt.Sprintf("%s.%s", schema.dbInfo.Name.O, schema.tableInfo.Name.O), *schema.tableInfo)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			tableInfoBytes, err := tableInfo.Marshal()
+			if err != nil {
+				return errors.Trace(err)
+			}
 			s := &backuppb.Schema{
 				Db:         dbBytes,
 				Table:      tableBytes,
+				TableInfo:  tableInfoBytes,
 				Crc64Xor:   schema.crc64xor,
 				TotalKvs:   schema.totalKvs,
 				TotalBytes: schema.totalBytes,

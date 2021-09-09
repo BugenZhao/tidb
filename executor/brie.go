@@ -440,6 +440,14 @@ func (gs *tidbGlueSession) CreateSession(store kv.Storage) (glue.Session, error)
 	return gs, nil
 }
 
+func (gs *tidbGlueSession) ShowCreateDatabase(db *model.DBInfo) (string, error) {
+	return "", nil
+}
+
+func (gs *tidbGlueSession) ShowCreateTable(tbl *model.TableInfo) (string, error) {
+	return "", nil
+}
+
 // Execute implements glue.Session
 // These queries execute without privilege checking, since the calling statements
 // such as BACKUP and RESTORE have already been privilege checked.

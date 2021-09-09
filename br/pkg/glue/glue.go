@@ -35,6 +35,8 @@ type Session interface {
 	Execute(ctx context.Context, sql string) error
 	CreateDatabase(ctx context.Context, schema *model.DBInfo) error
 	CreateTable(ctx context.Context, dbName model.CIStr, table *model.TableInfo) error
+	ShowCreateDatabase(db *model.DBInfo) (string, error)
+	ShowCreateTable(tbl *model.TableInfo) (string, error)
 	Close()
 }
 

@@ -94,6 +94,9 @@ require (
 	sourcegraph.com/sourcegraph/appdash-data v0.0.0-20151005221446-73f23eafcf67
 )
 
-// cloud.google.com/go/storage will upgrade grpc to v1.40.0
 // we need keep the replacement until go.etcd.io supports the higher version of grpc.
 replace google.golang.org/grpc => google.golang.org/grpc v1.29.1
+
+replace github.com/pingcap/kvproto => github.com/NingLin-P/kvproto v0.0.0-20210909175901-3bba0ef197d8
+
+replace github.com/pingcap/tipb => github.com/NingLin-P/tipb v0.0.0-20210909072905-0e9f4647f7ba

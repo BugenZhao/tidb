@@ -198,7 +198,7 @@ type SessionOptions struct {
 	RowFormatVersion string
 }
 
-func newSession(options *SessionOptions) *session {
+func NewSession(options *SessionOptions) *session {
 	sqlMode := options.SQLMode
 	vars := variable.NewSessionVars()
 	vars.SkipUTF8Check = true

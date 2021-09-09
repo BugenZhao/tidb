@@ -227,7 +227,7 @@ type tableKVEncoder struct {
 
 // NewTableKVEncoder creates the Encoder.
 func NewTableKVEncoder(tbl table.Table, options *SessionOptions) Encoder {
-	se := newSession(options)
+	se := NewSession(options)
 	// Set CommonAddRecordCtx to session to reuse the slices and BufStore in AddRecord
 	recordCtx := tables.NewCommonAddRecordCtx(len(tbl.Cols()))
 	tables.SetAddRecordCtx(se, recordCtx)

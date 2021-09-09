@@ -30,7 +30,7 @@ func TestKV(t *testing.T) {
 }
 
 func (s *kvSuite) TestSession(c *C) {
-	session := newSession(&SessionOptions{SQLMode: mysql.ModeNone, Timestamp: 1234567890, RowFormatVersion: "1"})
+	session := NewSession(&SessionOptions{SQLMode: mysql.ModeNone, Timestamp: 1234567890, RowFormatVersion: "1"})
 	_, err := session.Txn(true)
 	c.Assert(err, IsNil)
 }

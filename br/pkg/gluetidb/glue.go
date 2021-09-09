@@ -111,7 +111,7 @@ func (gs *tidbSession) Execute(ctx context.Context, sql string) error {
 // CreateDatabase implements glue.Session.
 func (gs *tidbSession) CreateDatabase(ctx context.Context, schema *model.DBInfo) error {
 	d := domain.GetDomain(gs.se).DDL()
-	query, err := gs.showCreateDatabase(schema)
+	query, err := gs.ShowCreateDatabase(schema)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -126,7 +126,7 @@ func (gs *tidbSession) CreateDatabase(ctx context.Context, schema *model.DBInfo)
 // CreateTable implements glue.Session.
 func (gs *tidbSession) CreateTable(ctx context.Context, dbName model.CIStr, table *model.TableInfo) error {
 	d := domain.GetDomain(gs.se).DDL()
-	query, err := gs.showCreateTable(table)
+	query, err := gs.ShowCreateTable(table)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -147,7 +147,7 @@ func (gs *tidbSession) Close() {
 }
 
 // showCreateTable shows the result of SHOW CREATE TABLE from a TableInfo.
-func (gs *tidbSession) showCreateTable(tbl *model.TableInfo) (string, error) {
+func (gs *tidbSession) ShowCreateTable(tbl *model.TableInfo) (string, error) {
 	table := tbl.Clone()
 	table.AutoIncID = 0
 	result := bytes.NewBuffer(make([]byte, 0, defaultCapOfCreateTable))
@@ -160,7 +160,7 @@ func (gs *tidbSession) showCreateTable(tbl *model.TableInfo) (string, error) {
 }
 
 // showCreateDatabase shows the result of SHOW CREATE DATABASE from a dbInfo.
-func (gs *tidbSession) showCreateDatabase(db *model.DBInfo) (string, error) {
+func (gs *tidbSession) ShowCreateDatabase(db *model.DBInfo) (string, error) {
 	result := bytes.NewBuffer(make([]byte, 0, defaultCapOfCreateDatabase))
 	// this can never fail.
 	_, _ = result.WriteString(brComment)
