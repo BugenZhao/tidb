@@ -118,7 +118,8 @@ func (ss *Schemas) BackupSchemaInSQL(ctx context.Context, g glue.Glue, externalS
 			if err != nil {
 				return errors.Trace(err)
 			}
-			err = externalStore.WriteFile(ctx, fmt.Sprintf("%s-%s", s.dbInfo.Name.L, CreateDBFileSuffix), []byte(str))
+			d := []byte(fmt.Sprintf("%s;\n", str))
+			err = externalStore.WriteFile(ctx, fmt.Sprintf("%s-%s", s.dbInfo.Name.L, CreateDBFileSuffix), d)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -128,7 +129,8 @@ func (ss *Schemas) BackupSchemaInSQL(ctx context.Context, g glue.Glue, externalS
 		if err != nil {
 			return errors.Trace(err)
 		}
-		err = externalStore.WriteFile(ctx, fmt.Sprintf("%s.%s-%s", s.dbInfo.Name.L, s.tableInfo.Name.L, CreateTableFileSuffix), []byte(str))
+		d := []byte(fmt.Sprintf("%s;\n", str))
+		err = externalStore.WriteFile(ctx, fmt.Sprintf("%s.%s-%s", s.dbInfo.Name.L, s.tableInfo.Name.L, CreateTableFileSuffix), d)
 		if err != nil {
 			return errors.Trace(err)
 		}
