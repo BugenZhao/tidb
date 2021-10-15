@@ -106,36 +106,41 @@ func (ss *Schemas) addSchema(
 	}
 }
 
-func (ss *Schemas) BackupSchemaInSQL(ctx context.Context, g glue.Glue, externalStore storage.ExternalStorage, store kv.Storage) error {
+func (ss *Schemas) BackupSchemaInSQL(ctx context.Context, g glue.Glue, externalStore storage.ExternalStorage, store kv.Storage) ([]*backuppb.File, error) {
 	se, err := g.CreateSession(store)
 	if err != nil {
-		return errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
 	mark := make(map[string]bool)
+	files := make([]*backuppb.File, 0)
 	for _, s := range ss.schemas {
 		if _, ok := mark[s.dbInfo.Name.L]; !ok {
 			str, err := se.ShowCreateDatabase(s.dbInfo)
 			if err != nil {
-				return errors.Trace(err)
+				return nil, errors.Trace(err)
 			}
 			d := []byte(fmt.Sprintf("%s;\n", str))
-			err = externalStore.WriteFile(ctx, fmt.Sprintf("%s-%s", s.dbInfo.Name.L, CreateDBFileSuffix), d)
+			fileName := fmt.Sprintf("%s-%s", s.dbInfo.Name.L, CreateDBFileSuffix)
+			files = append(files, &backuppb.File{Name: fileName, Size_: uint64(len(d))})
+			err = externalStore.WriteFile(ctx, fileName, d)
 			if err != nil {
-				return errors.Trace(err)
+				return nil, errors.Trace(err)
 			}
 			mark[s.dbInfo.Name.L] = true
 		}
 		str, err := se.ShowCreateTable(s.tableInfo)
 		if err != nil {
-			return errors.Trace(err)
+			return nil, errors.Trace(err)
 		}
 		d := []byte(fmt.Sprintf("%s;\n", str))
-		err = externalStore.WriteFile(ctx, fmt.Sprintf("%s.%s-%s", s.dbInfo.Name.L, s.tableInfo.Name.L, CreateTableFileSuffix), d)
+		fileName := fmt.Sprintf("%s.%s-%s", s.dbInfo.Name.L, s.tableInfo.Name.L, CreateTableFileSuffix)
+		files = append(files, &backuppb.File{Name: fileName, Size_: uint64(len(d))})
+		err = externalStore.WriteFile(ctx, fileName, d)
 		if err != nil {
-			return errors.Trace(err)
+			return nil, errors.Trace(err)
 		}
 	}
-	return nil
+	return files, nil
 }
 
 // BackupSchemas backups table info, including checksum and stats.

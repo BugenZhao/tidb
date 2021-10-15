@@ -464,10 +464,13 @@ func RunBackup(c context.Context, g glue.Glue, cmdName string, cfg *BackupConfig
 
 	// Backup schema in SQL
 	if cfg.BackupSchemaInSQL {
-		err = schemas.BackupSchemaInSQL(ctx, g, client.GetStorage(), mgr.GetStorage())
+		files, err := schemas.BackupSchemaInSQL(ctx, g, client.GetStorage(), mgr.GetStorage())
 		if err != nil {
 			return errors.Trace(err)
 		}
+		metawriter.Update(func(m *backuppb.BackupMeta) {
+			m.SchemaFiles = files
+		})
 	}
 
 	err = metawriter.FlushBackupMeta(ctx)
