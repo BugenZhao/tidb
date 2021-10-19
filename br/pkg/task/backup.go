@@ -44,6 +44,7 @@ const (
 	flagIgnoreStats       = "ignore-stats"
 	flagUseBackupMetaV2   = "use-backupmeta-v2"
 	flagBackupSchemaInSQL = "backup-schema-in-sql"
+	flagMaskSchemaName    = "backup-mask-schema-name"
 
 	flagGCTTL = "gcttl"
 
@@ -69,6 +70,7 @@ type BackupConfig struct {
 	IgnoreStats       bool          `json:"ignore-stats" toml:"ignore-stats"`
 	UseBackupMetaV2   bool          `json:"use-backupmeta-v2"`
 	BackupSchemaInSQL bool          `json:"backup-schema-in-sql"`
+	MaskSchemaName    bool          `json:"backup-mask-schema-name"`
 	CompressionConfig
 }
 
@@ -103,6 +105,9 @@ func DefineBackupFlags(flags *pflag.FlagSet) {
 
 	flags.Bool(flagBackupSchemaInSQL, true,
 		"whether backup schemas in sql file")
+
+	flags.Bool(flagMaskSchemaName, true,
+		"whether mask schemas name")
 
 	flags.Bool(flagUseBackupMetaV2, false,
 		"use backup meta v2 to store meta info")
@@ -162,6 +167,13 @@ func (cfg *BackupConfig) ParseFromFlags(flags *pflag.FlagSet) error {
 		return errors.Trace(err)
 	}
 	cfg.BackupSchemaInSQL, err = flags.GetBool(flagBackupSchemaInSQL)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	cfg.MaskSchemaName, err = flags.GetBool(flagMaskSchemaName)
+	if err != nil {
+		return errors.Trace(err)
+	}
 	cfg.UseBackupMetaV2, err = flags.GetBool(flagUseBackupMetaV2)
 	return errors.Trace(err)
 }
@@ -460,6 +472,11 @@ func RunBackup(c context.Context, g glue.Glue, cmdName string, cfg *BackupConfig
 		ctx, metawriter, mgr.GetStorage(), statsHandle, backupTS, schemasConcurrency, cfg.ChecksumConcurrency, skipChecksum, updateCh)
 	if err != nil {
 		return errors.Trace(err)
+	}
+
+	// Mask the schema name before backup these
+	if cfg.MaskSchemaName {
+		schemas.MaskSchemasNames()
 	}
 
 	// Backup schema in SQL

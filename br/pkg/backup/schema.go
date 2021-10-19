@@ -6,6 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/opentracing/opentracing-go"
@@ -106,6 +109,11 @@ func (ss *Schemas) addSchema(
 	}
 }
 
+type nameID struct {
+	name string
+	id   int64
+}
+
 func (ss *Schemas) BackupSchemaInSQL(ctx context.Context, g glue.Glue, externalStore storage.ExternalStorage, store kv.Storage) ([]*backuppb.File, error) {
 	se, err := g.CreateSession(store)
 	if err != nil {
@@ -114,26 +122,26 @@ func (ss *Schemas) BackupSchemaInSQL(ctx context.Context, g glue.Glue, externalS
 	mark := make(map[string]bool)
 	files := make([]*backuppb.File, 0)
 	for _, s := range ss.schemas {
-		if _, ok := mark[s.dbInfo.Name.L]; !ok {
+		if _, ok := mark[s.dbInfo.Name.O]; !ok {
 			str, err := se.ShowCreateDatabase(s.dbInfo)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
 			d := []byte(fmt.Sprintf("%s;\n", str))
-			fileName := fmt.Sprintf("%s-%s", s.dbInfo.Name.L, CreateDBFileSuffix)
+			fileName := fmt.Sprintf("%s-%s", s.dbInfo.Name.O, CreateDBFileSuffix)
 			files = append(files, &backuppb.File{Name: fileName, Size_: uint64(len(d))})
 			err = externalStore.WriteFile(ctx, fileName, d)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
-			mark[s.dbInfo.Name.L] = true
+			mark[s.dbInfo.Name.O] = true
 		}
 		str, err := se.ShowCreateTable(s.tableInfo)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
 		d := []byte(fmt.Sprintf("%s;\n", str))
-		fileName := fmt.Sprintf("%s.%s-%s", s.dbInfo.Name.L, s.tableInfo.Name.L, CreateTableFileSuffix)
+		fileName := fmt.Sprintf("%s.%s-%s", s.dbInfo.Name.O, s.tableInfo.Name.O, CreateTableFileSuffix)
 		files = append(files, &backuppb.File{Name: fileName, Size_: uint64(len(d))})
 		err = externalStore.WriteFile(ctx, fileName, d)
 		if err != nil {
@@ -141,6 +149,71 @@ func (ss *Schemas) BackupSchemaInSQL(ctx context.Context, g glue.Glue, externalS
 		}
 	}
 	return files, nil
+}
+
+// TODO: skip sys database
+func (ss *Schemas) MaskSchemasNames() {
+	dbName := make([]nameID, 0)
+	tableName := make([]nameID, 0)
+	mark := make(map[int64]bool)
+	for _, s := range ss.schemas {
+		db := s.dbInfo.Name.O
+		if _, ok := mark[s.dbInfo.ID]; !ok {
+			dbName = append(dbName, nameID{name: db, id: s.dbInfo.ID})
+			mark[s.dbInfo.ID] = true
+		}
+		tbl := fmt.Sprintf("%s.%s", db, s.tableInfo.Name.O)
+		if _, ok := mark[s.tableInfo.ID]; !ok {
+			tableName = append(tableName, nameID{name: tbl, id: s.tableInfo.ID})
+			mark[s.tableInfo.ID] = true
+		}
+		for _, t := range s.dbInfo.Tables {
+			tbl := fmt.Sprintf("%s.%s", db, t.Name.O)
+			if _, ok := mark[t.ID]; !ok {
+				tableName = append(tableName, nameID{name: tbl, id: t.ID})
+				mark[t.ID] = true
+			}
+		}
+	}
+	dbMap := sortedNameToMap("DB", dbName)
+	tableMap := sortedNameToMap("TABLE", tableName)
+	for _, s := range ss.schemas {
+		db := s.dbInfo.Name.O
+		for _, t := range s.dbInfo.Tables {
+			renameTable(tableMap, db, t)
+		}
+		renameTable(tableMap, db, s.tableInfo)
+		if n, ok := dbMap[s.dbInfo.ID]; ok {
+			rename(&s.dbInfo.Name, n)
+		}
+	}
+}
+
+func renameTable(tableMap map[int64]string, db string, table *model.TableInfo) {
+	if n, ok := tableMap[table.ID]; ok {
+		rename(&table.Name, n)
+	}
+	padingLen := len(strconv.Itoa(len(table.Columns)))
+	for i, col := range table.Columns {
+		rename(&col.Name, fmt.Sprintf("%s%0*d", "COL", padingLen, i))
+	}
+}
+
+func rename(n *model.CIStr, newName string) {
+	n.O = newName
+	n.L = strings.ToLower(newName)
+}
+
+func sortedNameToMap(prefix string, names []nameID) map[int64]string {
+	sort.Slice(names[:], func(l, r int) bool {
+		return names[l].name < names[r].name
+	})
+	padingLen := len(strconv.Itoa(len(names)))
+	nameMap := make(map[int64]string)
+	for i, n := range names {
+		nameMap[n.id] = fmt.Sprintf("%s%0*d", prefix, padingLen, i)
+	}
+	return nameMap
 }
 
 // BackupSchemas backups table info, including checksum and stats.
