@@ -40,6 +40,9 @@ const (
 	DefaultSchemaConcurrency = 64
 	CreateDBFileSuffix       = "schema-create.sql"
 	CreateTableFileSuffix    = "schema.sql"
+	MaskDatabasePrefix       = "DB"
+	MaskTablePrefix          = "TABLE"
+	MaskColumnPrefix         = "COL"
 )
 
 func GetCommonHandleId(t model.TableInfo) []int64 {
@@ -114,7 +117,7 @@ type nameID struct {
 	id   int64
 }
 
-func (ss *Schemas) BackupSchemaInSQL(ctx context.Context, g glue.Glue, externalStore storage.ExternalStorage, store kv.Storage) ([]*backuppb.File, error) {
+func (ss *Schemas) BackupSchemaInSQL(prefix string, ctx context.Context, g glue.Glue, externalStore storage.ExternalStorage, store kv.Storage) ([]*backuppb.File, error) {
 	se, err := g.CreateSession(store)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -128,7 +131,7 @@ func (ss *Schemas) BackupSchemaInSQL(ctx context.Context, g glue.Glue, externalS
 				return nil, errors.Trace(err)
 			}
 			d := []byte(fmt.Sprintf("%s;\n", str))
-			fileName := fmt.Sprintf("%s-%s", s.dbInfo.Name.O, CreateDBFileSuffix)
+			fileName := fmt.Sprintf("%s%s-%s", prefix, s.dbInfo.Name.O, CreateDBFileSuffix)
 			files = append(files, &backuppb.File{Name: fileName, Size_: uint64(len(d))})
 			err = externalStore.WriteFile(ctx, fileName, d)
 			if err != nil {
@@ -141,7 +144,7 @@ func (ss *Schemas) BackupSchemaInSQL(ctx context.Context, g glue.Glue, externalS
 			return nil, errors.Trace(err)
 		}
 		d := []byte(fmt.Sprintf("%s;\n", str))
-		fileName := fmt.Sprintf("%s.%s-%s", s.dbInfo.Name.O, s.tableInfo.Name.O, CreateTableFileSuffix)
+		fileName := fmt.Sprintf("%s%s.%s-%s", prefix, s.dbInfo.Name.O, s.tableInfo.Name.O, CreateTableFileSuffix)
 		files = append(files, &backuppb.File{Name: fileName, Size_: uint64(len(d))})
 		err = externalStore.WriteFile(ctx, fileName, d)
 		if err != nil {
@@ -175,8 +178,8 @@ func (ss *Schemas) MaskSchemasNames() {
 			}
 		}
 	}
-	dbMap := sortedNameToMap("DB", dbName)
-	tableMap := sortedNameToMap("TABLE", tableName)
+	dbMap := sortedNameIDToMap(MaskDatabasePrefix, dbName)
+	tableMap := sortedNameIDToMap(MaskTablePrefix, tableName)
 	for _, s := range ss.schemas {
 		db := s.dbInfo.Name.O
 		for _, t := range s.dbInfo.Tables {
@@ -190,13 +193,47 @@ func (ss *Schemas) MaskSchemasNames() {
 }
 
 func renameTable(tableMap map[int64]string, db string, table *model.TableInfo) {
-	if n, ok := tableMap[table.ID]; ok {
-		rename(&table.Name, n)
+	n, ok := tableMap[table.ID]
+	if !ok || table.Name.O == n {
+		// this table reference has already renamed
+		return
 	}
-	padingLen := len(strconv.Itoa(len(table.Columns)))
-	for i, col := range table.Columns {
-		rename(&col.Name, fmt.Sprintf("%s%0*d", "COL", padingLen, i))
+	rename(&table.Name, n)
+	colMap := make(map[string]string)
+	for _, col := range table.Columns {
+		colName := fmt.Sprintf("%s%d", MaskColumnPrefix, col.Offset)
+		colMap[col.Name.O] = colName
+		rename(&col.Name, colName)
 	}
+	// rename index
+	for _, idx := range table.Indices {
+		rename(&idx.Table, n)
+		for _, c := range idx.Columns {
+			if colName, ok := colMap[c.Name.O]; ok {
+				rename(&c.Name, colName)
+			}
+		}
+	}
+	// rename constraint
+	for _, constraint := range table.Constraints {
+		rename(&constraint.Table, n)
+		for i, c := range constraint.ConstraintCols {
+			if colName, ok := colMap[c.O]; ok {
+				rename(&constraint.ConstraintCols[i], colName)
+			}
+		}
+	}
+	// rename partition
+	if table.Partition != nil {
+		for i, c := range table.Partition.Columns {
+			if colName, ok := colMap[c.O]; ok {
+				rename(&table.Partition.Columns[i], colName)
+			}
+		}
+	}
+	// clear foreign key
+	table.ForeignKeys = make([]*model.FKInfo, 0)
+
 }
 
 func rename(n *model.CIStr, newName string) {
@@ -204,7 +241,7 @@ func rename(n *model.CIStr, newName string) {
 	n.L = strings.ToLower(newName)
 }
 
-func sortedNameToMap(prefix string, names []nameID) map[int64]string {
+func sortedNameIDToMap(prefix string, names []nameID) map[int64]string {
 	sort.Slice(names[:], func(l, r int) bool {
 		return names[l].name < names[r].name
 	})
@@ -212,6 +249,16 @@ func sortedNameToMap(prefix string, names []nameID) map[int64]string {
 	nameMap := make(map[int64]string)
 	for i, n := range names {
 		nameMap[n.id] = fmt.Sprintf("%s%0*d", prefix, padingLen, i)
+	}
+	return nameMap
+}
+
+func sortedStringToMap(prefix string, names []string) map[string]string {
+	sort.Strings(names)
+	padingLen := len(strconv.Itoa(len(names)))
+	nameMap := make(map[string]string)
+	for i, n := range names {
+		nameMap[n] = fmt.Sprintf("%s%0*d", prefix, padingLen, i)
 	}
 	return nameMap
 }

@@ -476,12 +476,23 @@ func RunBackup(c context.Context, g glue.Glue, cmdName string, cfg *BackupConfig
 
 	// Mask the schema name before backup these
 	if cfg.MaskSchemaName {
+		if cfg.BackupSchemaInSQL {
+			// backup the non-mask schema first
+			_, err := schemas.BackupSchemaInSQL("", ctx, g, client.GetStorage(), mgr.GetStorage())
+			if err != nil {
+				return errors.Trace(err)
+			}
+		}
 		schemas.MaskSchemasNames()
 	}
 
 	// Backup schema in SQL
 	if cfg.BackupSchemaInSQL {
-		files, err := schemas.BackupSchemaInSQL(ctx, g, client.GetStorage(), mgr.GetStorage())
+		prefix := ""
+		if cfg.MaskSchemaName {
+			prefix = "masked-"
+		}
+		files, err := schemas.BackupSchemaInSQL(prefix, ctx, g, client.GetStorage(), mgr.GetStorage())
 		if err != nil {
 			return errors.Trace(err)
 		}
