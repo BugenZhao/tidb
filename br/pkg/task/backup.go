@@ -468,22 +468,25 @@ func RunBackup(c context.Context, g glue.Glue, cmdName string, cfg *BackupConfig
 	updateCh = g.StartProgress(ctx, "Checksum", checksumProgress, !cfg.LogProgress)
 	schemasConcurrency := uint(utils.MinInt(backup.DefaultSchemaConcurrency, schemas.Len()))
 
-	err = schemas.BackupSchemas(
-		ctx, metawriter, mgr.GetStorage(), statsHandle, backupTS, schemasConcurrency, cfg.ChecksumConcurrency, skipChecksum, updateCh)
-	if err != nil {
-		return errors.Trace(err)
-	}
-
 	// Mask the schema name before backup these
 	if cfg.MaskSchemaName {
 		if cfg.BackupSchemaInSQL {
 			// backup the non-mask schema first
-			_, err := schemas.BackupSchemaInSQL("", ctx, g, client.GetStorage(), mgr.GetStorage())
+			files, err := schemas.BackupSchemaInSQL("", ctx, g, client.GetStorage(), mgr.GetStorage())
 			if err != nil {
 				return errors.Trace(err)
 			}
+			metawriter.Update(func(m *backuppb.BackupMeta) {
+				m.OriginalSchemaFiles = files
+			})
 		}
 		schemas.MaskSchemasNames()
+	}
+
+	err = schemas.BackupSchemas(
+		ctx, metawriter, mgr.GetStorage(), statsHandle, backupTS, schemasConcurrency, cfg.ChecksumConcurrency, skipChecksum, updateCh)
+	if err != nil {
+		return errors.Trace(err)
 	}
 
 	// Backup schema in SQL
@@ -497,7 +500,7 @@ func RunBackup(c context.Context, g glue.Glue, cmdName string, cfg *BackupConfig
 			return errors.Trace(err)
 		}
 		metawriter.Update(func(m *backuppb.BackupMeta) {
-			m.SchemaFiles = files
+			m.SchemaFiles = append(m.SchemaFiles, files...)
 		})
 	}
 
