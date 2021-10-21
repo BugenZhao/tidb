@@ -56,6 +56,7 @@ const (
 	flagConcurrency         = "concurrency"
 	flagChecksum            = "checksum"
 	flagFilter              = "filter"
+	flagSkipSysDB           = "skip-sys-db"
 	flagCaseSensitive       = "case-sensitive"
 	flagRemoveTiFlash       = "remove-tiflash"
 	flagCheckRequirement    = "check-requirements"
@@ -195,6 +196,9 @@ func DefineCommonFlags(flags *pflag.FlagSet) {
 	flags.BoolP(flagSkipCheckPath, "", false, "Skip path verification")
 	_ = flags.MarkHidden(flagSkipCheckPath)
 
+	flags.Bool(flagSkipSysDB, true,
+		"Whether to skip backup and restore system database")
+
 	storage.DefineFlags(flags)
 }
 
@@ -284,12 +288,21 @@ func (cfg *Config) ParseFromFlags(flags *pflag.FlagSet) error {
 	}
 	cfg.RateLimit = rateLimit * rateLimitUnit
 
+	skipSysDB, err := flags.GetBool(flagSkipSysDB)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
 	cfg.Schemas = make(map[string]struct{})
 	cfg.Tables = make(map[string]struct{})
 	var caseSensitive bool
 	if filterFlag := flags.Lookup(flagFilter); filterFlag != nil {
 		var f filter.Filter
-		f, err = filter.Parse(filterFlag.Value.(pflag.SliceValue).GetSlice())
+		args := filterFlag.Value.(pflag.SliceValue).GetSlice()
+		if skipSysDB {
+			args = append(args, "!mysql.*")
+		}
+		f, err = filter.Parse(args)
 		if err != nil {
 			return errors.Trace(err)
 		}
