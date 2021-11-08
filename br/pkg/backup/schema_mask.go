@@ -22,8 +22,12 @@ const (
 	defaultHashContext = "tidb"
 )
 
-func NewDictionary(context string, prefix string) *Dictionary {
-	return &Dictionary{
+func newColumnDictionary() *dictionary {
+	return newDictionary(defaultHashContext, maskColumnPrefix)
+}
+
+func newDictionary(context string, prefix string) *dictionary {
+	return &dictionary{
 		hasher: blake3.NewDeriveKey(context),
 		prefix: prefix,
 		dict:   make(map[string]uint32),
@@ -31,7 +35,7 @@ func NewDictionary(context string, prefix string) *Dictionary {
 	}
 }
 
-type Dictionary struct {
+type dictionary struct {
 	hasher *blake3.Hasher
 	prefix string
 
@@ -39,14 +43,14 @@ type Dictionary struct {
 	values map[uint32]bool
 }
 
-func (d *Dictionary) get(key string) string {
+func (d *dictionary) get(key string) string {
 	if value, ok := d.dict[key]; ok {
 		return fmt.Sprintf("%s%s", d.prefix, strconv.FormatUint(uint64(value), 36))
 	}
 	return ""
 }
 
-func (d *Dictionary) Map(key string) string {
+func (d *dictionary) Map(key string) string {
 	value := d.get(key)
 	if value != "" {
 		return value
@@ -97,7 +101,7 @@ func (ss *Schemas) MaskSchemasNames() {
 	}
 	dbMap := sortedNameIDToMap(maskDatabasePrefix, dbName)
 	tableMap := sortedNameIDToMap(maskTablePrefix, tableName)
-	colDict := NewDictionary(defaultHashContext, maskColumnPrefix)
+	colDict := newColumnDictionary()
 	for _, s := range ss.schemas {
 		for _, t := range s.dbInfo.Tables {
 			renameTable(tableMap, colDict, t)
@@ -109,7 +113,7 @@ func (ss *Schemas) MaskSchemasNames() {
 	}
 }
 
-func renameTable(tableMap map[int64]string, dict *Dictionary, table *model.TableInfo) {
+func renameTable(tableMap map[int64]string, dict *dictionary, table *model.TableInfo) {
 	n, ok := tableMap[table.ID]
 	if !ok || table.Name.O == n {
 		// this table reference has already renamed
