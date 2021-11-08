@@ -3,7 +3,10 @@
 package backup
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -30,6 +33,7 @@ import (
 	"github.com/pingcap/tidb/statistics/handle"
 	"github.com/pingcap/tidb/util"
 	"github.com/pingcap/tipb/go-tipb"
+	"github.com/zeebo/blake3"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -43,6 +47,7 @@ const (
 	MaskDatabasePrefix       = "MASKED_DB"
 	MaskTablePrefix          = "TABLE"
 	MaskColumnPrefix         = "COL"
+	defaultContext           = "tidb"
 )
 
 func GetCommonHandleId(t model.TableInfo) []int64 {
@@ -154,7 +159,6 @@ func (ss *Schemas) BackupSchemaInSQL(prefix string, ctx context.Context, g glue.
 	return files, nil
 }
 
-// TODO: skip sys database
 func (ss *Schemas) MaskSchemasNames() {
 	dbName := make([]nameID, 0)
 	tableName := make([]nameID, 0)
@@ -204,6 +208,14 @@ func renameTable(tableMap map[int64]string, db string, table *model.TableInfo) {
 		colName := fmt.Sprintf("%s%d_%d", MaskColumnPrefix, table.ID, col.Offset)
 		colMap[col.Name.O] = colName
 		rename(&col.Name, colName)
+		// Mask the enum elements
+		if len(col.Elems) != 0 {
+			newElems := make([]string, 0)
+			for _, e := range col.Elems {
+				newElems = append(newElems, maskString([]byte(e)))
+			}
+			col.Elems = newElems
+		}
 	}
 	// rename index
 	for _, idx := range table.Indices {
@@ -261,6 +273,41 @@ func sortedStringToMap(prefix string, names []string) map[string]string {
 		nameMap[n] = fmt.Sprintf("%s%0*d", prefix, padingLen, i)
 	}
 	return nameMap
+}
+
+func hashBytes(data interface{}, size int) []byte {
+	var bs []byte
+	switch data := data.(type) {
+	case []byte:
+		bs = data
+	default:
+		buf := new(bytes.Buffer)
+		_ = binary.Write(buf, binary.LittleEndian, data)
+		bs = buf.Bytes()
+	}
+
+	hasher := blake3.NewDeriveKey(defaultContext)
+	_, _ = hasher.Write(bs)
+
+	sum := make([]byte, size)
+	n, err := hasher.Digest().Read(sum)
+	if err != nil {
+		panic(err)
+	}
+	if n != size {
+		panic(fmt.Sprintf("bad size `%d` vs `%d`", n, size))
+	}
+
+	return sum
+}
+
+func maskString(s []byte) string {
+	size := len(s)
+
+	sum := hashBytes([]byte(s), size/2)
+	hex := hex.EncodeToString(sum)
+	hex = hex + strings.Repeat("*", size-len(hex))
+	return hex
 }
 
 // BackupSchemas backups table info, including checksum and stats.
