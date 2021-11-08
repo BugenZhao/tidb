@@ -23,6 +23,7 @@ const (
 )
 
 func newColumnDictionary() *dictionary {
+	// todo: context should be configurable
 	return newDictionary(defaultHashContext, maskColumnPrefix)
 }
 
@@ -194,7 +195,7 @@ func hashBytes(data interface{}, size int) []byte {
 		bs = buf.Bytes()
 	}
 
-	hasher := blake3.NewDeriveKey(defaultHashContext)
+	hasher := blake3.NewDeriveKey(defaultHashContext) // todo: context should be configurable
 	_, _ = hasher.Write(bs)
 
 	sum := make([]byte, size)
