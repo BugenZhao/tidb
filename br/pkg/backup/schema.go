@@ -3,15 +3,9 @@
 package backup
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"sort"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/opentracing/opentracing-go"
@@ -33,7 +27,6 @@ import (
 	"github.com/pingcap/tidb/statistics/handle"
 	"github.com/pingcap/tidb/util"
 	"github.com/pingcap/tipb/go-tipb"
-	"github.com/zeebo/blake3"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -44,10 +37,6 @@ const (
 	DefaultSchemaConcurrency = 64
 	CreateDBFileSuffix       = "schema-create.sql"
 	CreateTableFileSuffix    = "schema.sql"
-	MaskDatabasePrefix       = "MASKED_DB"
-	MaskTablePrefix          = "TABLE"
-	MaskColumnPrefix         = "COL"
-	defaultContext           = "tidb"
 )
 
 func GetCommonHandleId(t model.TableInfo) []int64 {
@@ -157,157 +146,6 @@ func (ss *Schemas) BackupSchemaInSQL(prefix string, ctx context.Context, g glue.
 		}
 	}
 	return files, nil
-}
-
-func (ss *Schemas) MaskSchemasNames() {
-	dbName := make([]nameID, 0)
-	tableName := make([]nameID, 0)
-	mark := make(map[int64]bool)
-	for _, s := range ss.schemas {
-		db := s.dbInfo.Name.O
-		if _, ok := mark[s.dbInfo.ID]; !ok {
-			dbName = append(dbName, nameID{name: db, id: s.dbInfo.ID})
-			mark[s.dbInfo.ID] = true
-		}
-		tbl := fmt.Sprintf("%s.%s", db, s.tableInfo.Name.O)
-		if _, ok := mark[s.tableInfo.ID]; !ok {
-			tableName = append(tableName, nameID{name: tbl, id: s.tableInfo.ID})
-			mark[s.tableInfo.ID] = true
-		}
-		for _, t := range s.dbInfo.Tables {
-			tbl := fmt.Sprintf("%s.%s", db, t.Name.O)
-			if _, ok := mark[t.ID]; !ok {
-				tableName = append(tableName, nameID{name: tbl, id: t.ID})
-				mark[t.ID] = true
-			}
-		}
-	}
-	dbMap := sortedNameIDToMap(MaskDatabasePrefix, dbName)
-	tableMap := sortedNameIDToMap(MaskTablePrefix, tableName)
-	for _, s := range ss.schemas {
-		db := s.dbInfo.Name.O
-		for _, t := range s.dbInfo.Tables {
-			renameTable(tableMap, db, t)
-		}
-		renameTable(tableMap, db, s.tableInfo)
-		if n, ok := dbMap[s.dbInfo.ID]; ok {
-			rename(&s.dbInfo.Name, n)
-		}
-	}
-}
-
-func renameTable(tableMap map[int64]string, db string, table *model.TableInfo) {
-	n, ok := tableMap[table.ID]
-	if !ok || table.Name.O == n {
-		// this table reference has already renamed
-		return
-	}
-	rename(&table.Name, n)
-	colMap := make(map[string]string)
-	for _, col := range table.Columns {
-		colName := fmt.Sprintf("%s%d_%d", MaskColumnPrefix, table.ID, col.Offset)
-		colMap[col.Name.O] = colName
-		rename(&col.Name, colName)
-		// Mask the enum elements
-		if len(col.Elems) != 0 {
-			newElems := make([]string, 0)
-			for _, e := range col.Elems {
-				newElems = append(newElems, maskString([]byte(e)))
-			}
-			col.Elems = newElems
-		}
-	}
-	// rename index
-	for _, idx := range table.Indices {
-		rename(&idx.Table, n)
-		for _, c := range idx.Columns {
-			if colName, ok := colMap[c.Name.O]; ok {
-				rename(&c.Name, colName)
-			}
-		}
-	}
-	// rename constraint
-	for _, constraint := range table.Constraints {
-		rename(&constraint.Table, n)
-		for i, c := range constraint.ConstraintCols {
-			if colName, ok := colMap[c.O]; ok {
-				rename(&constraint.ConstraintCols[i], colName)
-			}
-		}
-	}
-	// rename partition
-	if table.Partition != nil {
-		for i, c := range table.Partition.Columns {
-			if colName, ok := colMap[c.O]; ok {
-				rename(&table.Partition.Columns[i], colName)
-			}
-		}
-	}
-	// clear foreign key
-	table.ForeignKeys = make([]*model.FKInfo, 0)
-
-}
-
-func rename(n *model.CIStr, newName string) {
-	n.O = newName
-	n.L = strings.ToLower(newName)
-}
-
-func sortedNameIDToMap(prefix string, names []nameID) map[int64]string {
-	sort.Slice(names[:], func(l, r int) bool {
-		return names[l].name < names[r].name
-	})
-	padingLen := len(strconv.Itoa(len(names)))
-	nameMap := make(map[int64]string)
-	for i, n := range names {
-		nameMap[n.id] = fmt.Sprintf("%s%0*d", prefix, padingLen, i)
-	}
-	return nameMap
-}
-
-func sortedStringToMap(prefix string, names []string) map[string]string {
-	sort.Strings(names)
-	padingLen := len(strconv.Itoa(len(names)))
-	nameMap := make(map[string]string)
-	for i, n := range names {
-		nameMap[n] = fmt.Sprintf("%s%0*d", prefix, padingLen, i)
-	}
-	return nameMap
-}
-
-func hashBytes(data interface{}, size int) []byte {
-	var bs []byte
-	switch data := data.(type) {
-	case []byte:
-		bs = data
-	default:
-		buf := new(bytes.Buffer)
-		_ = binary.Write(buf, binary.LittleEndian, data)
-		bs = buf.Bytes()
-	}
-
-	hasher := blake3.NewDeriveKey(defaultContext)
-	_, _ = hasher.Write(bs)
-
-	sum := make([]byte, size)
-	n, err := hasher.Digest().Read(sum)
-	if err != nil {
-		panic(err)
-	}
-	if n != size {
-		panic(fmt.Sprintf("bad size `%d` vs `%d`", n, size))
-	}
-
-	return sum
-}
-
-func maskString(s []byte) string {
-	size := len(s)
-
-	sum := hashBytes([]byte(s), size/2)
-	hex := hex.EncodeToString(sum)
-	hex = hex + strings.Repeat("*", size-len(hex))
-	return hex
 }
 
 // BackupSchemas backups table info, including checksum and stats.
