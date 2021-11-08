@@ -40,7 +40,7 @@ const (
 	DefaultSchemaConcurrency = 64
 	CreateDBFileSuffix       = "schema-create.sql"
 	CreateTableFileSuffix    = "schema.sql"
-	MaskDatabasePrefix       = "DB"
+	MaskDatabasePrefix       = "MASKED_DB"
 	MaskTablePrefix          = "TABLE"
 	MaskColumnPrefix         = "COL"
 )
@@ -201,7 +201,7 @@ func renameTable(tableMap map[int64]string, db string, table *model.TableInfo) {
 	rename(&table.Name, n)
 	colMap := make(map[string]string)
 	for _, col := range table.Columns {
-		colName := fmt.Sprintf("%s%d", MaskColumnPrefix, col.Offset)
+		colName := fmt.Sprintf("%s%d_%d", MaskColumnPrefix, table.ID, col.Offset)
 		colMap[col.Name.O] = colName
 		rename(&col.Name, colName)
 	}
